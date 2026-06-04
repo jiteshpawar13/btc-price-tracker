@@ -15,18 +15,32 @@ let previousPrice = null;
 const activeChats = new Map();
 
 function connectBinance() {
-  const ws = new WebSocket("wss://stream.binance.com:9443/ws/btcusdt@trade");
+  const ws = new WebSocket("wss://ws-feed.exchange.coinbase.com");
 
   ws.on("open", () => {
-    console.log("Connected to Binance");
+    console.log("Connected to Coinbase");
+
+    ws.send(
+      JSON.stringify({
+        type: "subscribe",
+        channels: [
+          {
+            name: "ticker",
+            product_ids: ["BTC-USD"],
+          },
+        ],
+      }),
+    );
   });
 
   ws.on("message", (data) => {
     try {
       const trade = JSON.parse(data);
 
-      previousPrice = btcPrice;
-      btcPrice = parseFloat(trade.p).toFixed(2);
+      if (trade.type === "ticker") {
+        previousPrice = btcPrice;
+        btcPrice = parseFloat(trade.price).toFixed(2);
+      }
     } catch (err) {
       console.error(err);
     }
