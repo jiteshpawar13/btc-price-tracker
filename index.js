@@ -6,16 +6,21 @@ const WebSocket = require("ws");
 const token = process.env.BOT_TOKEN;
 
 const bot = new TelegramBot(token, {
-  polling: true,
+  polling: true
 });
 
 let btcPrice = null;
 let previousPrice = null;
 
 const activeChats = new Map();
+const lastNotifications = new Map();
 
-function connectBinance() {
-  const ws = new WebSocket("wss://ws-feed.exchange.coinbase.com");
+const PRICE_CHANGE_THRESHOLD = 10;
+
+function connectCoinbase() {
+  const ws = new WebSocket(
+    "wss://ws-feed.exchange.coinbase.com"
+  );
 
   ws.on("open", () => {
     console.log("Connected to Coinbase");
@@ -26,10 +31,10 @@ function connectBinance() {
         channels: [
           {
             name: "ticker",
-            product_ids: ["BTC-USD"],
-          },
-        ],
-      }),
+            product_ids: ["BTC-USD"]
+          }
+        ]
+      })
     );
   });
 
@@ -37,9 +42,14 @@ function connectBinance() {
     try {
       const trade = JSON.parse(data);
 
-      if (trade.type === "ticker") {
+      if (
+        trade.type === "ticker" &&
+        trade.price
+      ) {
         previousPrice = btcPrice;
-        btcPrice = parseFloat(trade.price).toFixed(2);
+        btcPrice = parseFloat(
+          trade.price
+        );
       }
     } catch (err) {
       console.error(err);
@@ -47,99 +57,149 @@ function connectBinance() {
   });
 
   ws.on("close", () => {
-    console.log("Reconnecting...");
-    setTimeout(connectBinance, 3000);
+    console.log(
+      "Coinbase disconnected. Reconnecting..."
+    );
+
+    setTimeout(connectCoinbase, 3000);
   });
 
   ws.on("error", (err) => {
-    console.error("WebSocket error", err);
-    ws.close();
+    console.log(
+      "WebSocket error:",
+      err.message
+    );
   });
 }
 
-connectBinance();
+connectCoinbase();
 
 function getDirection() {
-  if (!previousPrice || !btcPrice) return "⏺";
+  if (
+    previousPrice === null ||
+    btcPrice === null
+  ) {
+    return "⏺";
+  }
 
-  return btcPrice > previousPrice ? "🟢 ▲" : btcPrice < previousPrice ? "🔴 ▼" : "⚪";
+  if (btcPrice > previousPrice) {
+    return "🟢 ▲";
+  }
+
+  if (btcPrice < previousPrice) {
+    return "🔴 ▼";
+  }
+
+  return "⚪";
 }
 
-function generateMessage() {
+function shouldNotify() {
+  if (
+    previousPrice === null ||
+    btcPrice === null
+  ) {
+    return false;
+  }
+
+  const difference = Math.abs(
+    btcPrice - previousPrice
+  );
+
+  return (
+    difference >=
+    PRICE_CHANGE_THRESHOLD
+  );
+}
+
+function generateNotification() {
   const direction = getDirection();
 
-  return `
-₿ <b>BTC / USDT</b>
-
-💰 <b>$${btcPrice}</b>
-
-${direction}
-
-⏱ Updated: ${new Date().toLocaleTimeString()}
-`.trim();
+  return `₿ BTC $${btcPrice.toLocaleString(
+    "en-US",
+    {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
+    }
+  )} ${direction}`;
 }
 
 bot.onText(/\/start/, async (msg) => {
   const chatId = msg.chat.id;
 
-  const sent = await bot.sendMessage(chatId, "Starting BTC Live Tracker...", {
-    parse_mode: "HTML",
-  });
-
-  activeChats.set(chatId, sent.message_id);
+  activeChats.set(chatId, true);
 
   bot.sendMessage(
     chatId,
     `
-✅ Live BTC tracker started
+✅ BTC Live Tracker Started
 
-Pin this message for quick access.
+You will receive lock-screen updates.
 
 Commands:
-/stop - Stop tracker
-/price - Current price
-`.trim(),
+/stop → Stop tracker
+/price → Current BTC price
+`.trim()
   );
 });
 
 bot.onText(/\/price/, (msg) => {
-  bot.sendMessage(msg.chat.id, generateMessage(), {
-    parse_mode: "HTML",
-  });
+  if (!btcPrice) {
+    return bot.sendMessage(
+      msg.chat.id,
+      "Fetching BTC price..."
+    );
+  }
+
+  bot.sendMessage(
+    msg.chat.id,
+    generateNotification()
+  );
 });
 
 bot.onText(/\/stop/, (msg) => {
   activeChats.delete(msg.chat.id);
 
-  bot.sendMessage(msg.chat.id, "⛔ BTC tracker stopped");
+  bot.sendMessage(
+    msg.chat.id,
+    "⛔ BTC tracker stopped"
+  );
 });
 
-let lastNotifications = new Map();
-
 setInterval(async () => {
-  for (const [chatId] of activeChats.entries()) {
+  if (!shouldNotify()) return;
+
+  for (const [chatId] of activeChats) {
     try {
-      const direction = getDirection();
+      const sent =
+        await bot.sendMessage(
+          chatId,
+          generateNotification(),
+          {
+            disable_notification: false
+          }
+        );
 
-      const text = `₿ BTC/USDT
-$${btcPrice}
-${direction}`;
-
-      const sent = await bot.sendMessage(chatId, text, {
-        disable_notification: false,
-      });
-
-      const oldMessageId = lastNotifications.get(chatId);
+      const oldMessageId =
+        lastNotifications.get(chatId);
 
       if (oldMessageId) {
         try {
-          await bot.deleteMessage(chatId, oldMessageId);
-        } catch (e) {}
+          await bot.deleteMessage(
+            chatId,
+            oldMessageId
+          );
+        } catch {}
       }
 
-      lastNotifications.set(chatId, sent.message_id);
+      lastNotifications.set(
+        chatId,
+        sent.message_id
+      );
     } catch (err) {
-      console.log(err.message);
+      console.log(
+        "Telegram error:",
+        err.message
+      );
     }
   }
 }, 5000);
