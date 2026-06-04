@@ -85,10 +85,9 @@ function shouldNotify() {
   if (previousPrice === null || btcPrice === null) {
     return false;
   }
-
   const difference = Math.abs(btcPrice - previousPrice);
-
-  return difference >= PRICE_CHANGE_THRESHOLD;
+  console.log("BTC Change:", difference);
+  return difference >= 1;
 }
 
 function generateNotification() {
@@ -134,25 +133,21 @@ bot.onText(/\/stop/, (msg) => {
 });
 
 setInterval(async () => {
-  if (!shouldNotify()) return;
-
+  if (!btcPrice) return;
   for (const [chatId] of activeChats) {
     try {
-      const sent = await bot.sendMessage(chatId, generateNotification(), {
-        disable_notification: false,
-      });
-
+      const sent = await bot.sendMessage(chatId, generateNotification(), { disable_notification: false });
       const oldMessageId = lastNotifications.get(chatId);
-
       if (oldMessageId) {
         try {
           await bot.deleteMessage(chatId, oldMessageId);
-        } catch {}
+        } catch (err) {
+          console.log("Delete failed:", err.message);
+        }
       }
-
       lastNotifications.set(chatId, sent.message_id);
     } catch (err) {
-      console.log("Telegram error:", err.message);
+      console.log("Telegram send failed:", err.message);
     }
   }
 }, 5000);
